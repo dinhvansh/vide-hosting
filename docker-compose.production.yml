@@ -1,0 +1,217 @@
+name: vive-host
+
+x-backend-environment: &backend_environment
+  APP_NAME: Vive Host
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_KEY: ${APP_KEY:?APP_KEY is required}
+  ADMIN_NAME: ${ADMIN_NAME:-Vive Admin}
+  ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL is required}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+  APP_URL: https://${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required}
+  FRONTEND_URL: https://${PUBLIC_DOMAIN}
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: ${LOG_LEVEL:-warning}
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_DATABASE: ${DB_DATABASE:-vive}
+  DB_USERNAME: ${DB_USERNAME:-vive}
+  DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: redis
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+  REDIS_QUEUE_RETRY_AFTER: "2100"
+  REDIS_NOTIFICATION_QUEUE_RETRY_AFTER: "90"
+  DEPLOYMENT_PROVIDER: dokploy
+  DOKPLOY_URL: ${DOKPLOY_URL:?DOKPLOY_URL is required}
+  DOKPLOY_TOKEN: ${DOKPLOY_TOKEN:?DOKPLOY_TOKEN is required}
+  DOKPLOY_SERVER_ID: ${DOKPLOY_SERVER_ID:-}
+  DOKPLOY_RAILPACK_VERSION: ${DOKPLOY_RAILPACK_VERSION:-0.15.4}
+  DEPLOYMENT_STALE_MINUTES: ${DEPLOYMENT_STALE_MINUTES:-35}
+  DEPLOYMENT_QUEUED_MINUTES: ${DEPLOYMENT_QUEUED_MINUTES:-10}
+  PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN is required}
+  CUSTOM_DOMAINS_ENABLED: ${CUSTOM_DOMAINS_ENABLED:-false}
+  MAIL_MAILER: ${MAIL_MAILER:?MAIL_MAILER is required}
+  MAIL_HOST: ${MAIL_HOST:-}
+  MAIL_PORT: ${MAIL_PORT:-587}
+  MAIL_USERNAME: ${MAIL_USERNAME:-}
+  MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+  MAIL_SCHEME: ${MAIL_SCHEME:-tls}
+  MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is required}
+  MAIL_FROM_NAME: Vive Host
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-vive}
+      POSTGRES_USER: ${DB_USERNAME:-vive}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-vive} -d ${DB_DATABASE:-vive}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+    security_opt: [no-new-privileges:true]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [control]
+    security_opt: [no-new-privileges:true]
+
+  migrate:
+    build: { context: ./backend }
+    command: ["sh", "-ec", "php artisan production:preflight && php artisan migrate --force --isolated"]
+    environment: *backend_environment
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [control, egress]
+    restart: "no"
+
+  backend:
+    build: { context: ./backend }
+    command: frankenphp run --config /etc/caddy/Caddyfile
+    restart: unless-stopped
+    environment: *backend_environment
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8000/api/v1/health/live') === false ? 1 : 0);"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [control, edge, egress]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  worker:
+    build: { context: ./backend }
+    command: php artisan queue:work --queue=default --sleep=1 --tries=3 --timeout=1800 --max-time=3600
+    restart: unless-stopped
+    stop_grace_period: 35s
+    environment: *backend_environment
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [control, egress]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  notification-worker:
+    build: { context: ./backend }
+    command: php artisan queue:work redis-notifications --queue=notifications --sleep=1 --tries=3 --timeout=60 --max-time=3600
+    restart: unless-stopped
+    stop_grace_period: 35s
+    environment: *backend_environment
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [control, egress]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  scheduler:
+    build: { context: ./backend }
+    command: php artisan schedule:work
+    restart: unless-stopped
+    environment: *backend_environment
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [control, egress]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: /api/v1
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [edge]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
+    volumes:
+      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend: { condition: service_healthy }
+      frontend: { condition: service_healthy }
+    networks: [edge, dokploy]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.vive-web.rule=Host(`${PUBLIC_DOMAIN}`)
+      - traefik.http.routers.vive-web.entrypoints=web
+      - traefik.http.routers.vive-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.vive-web.service=vive-gateway
+      - traefik.http.routers.vive.rule=Host(`${PUBLIC_DOMAIN}`)
+      - traefik.http.routers.vive.entrypoints=websecure
+      - traefik.http.routers.vive.tls.certresolver=letsencrypt
+      - traefik.http.routers.vive.service=vive-gateway
+      - traefik.http.services.vive-gateway.loadbalancer.server.port=8080
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+
+  backup-postgres:
+    image: postgres:17-alpine
+    profiles: [maintenance]
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+    command:
+      - sh
+      - -ec
+      - umask 077; pg_dump -h postgres -U ${DB_USERNAME:-vive} -d ${DB_DATABASE:-vive} --format=custom --file="/backups/postgres-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [control]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+networks:
+  control:
+    internal: true
+  edge: {}
+  egress: {}
+  dokploy:
+    external: true
+    name: dokploy-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

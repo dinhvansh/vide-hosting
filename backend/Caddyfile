@@ -1,0 +1,22 @@
+{
+	auto_https off
+	admin off
+}
+
+:8000 {
+	root * /app/public
+	encode zstd br gzip
+	php_server {
+		try_files {path} index.php
+	}
+	log {
+		format filter {
+			request>uri query {
+				replace token REDACTED
+				replace url REDACTED
+				replace signature REDACTED
+				replace email REDACTED
+			}
+		}
+	}
+}

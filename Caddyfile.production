@@ -1,0 +1,33 @@
+:8080 {
+	encode zstd gzip
+
+	@api path /api/* /up
+	handle @api {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+		-X-Powered-By
+	}
+
+	log {
+		format filter {
+			request>uri query {
+				replace token REDACTED
+				replace url REDACTED
+				replace signature REDACTED
+				replace email REDACTED
+			}
+		}
+	}
+}

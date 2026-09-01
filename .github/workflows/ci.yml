@@ -1,0 +1,49 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with: { php-version: "8.4", extensions: mbstring, pdo_sqlite }
+      - run: composer install --no-interaction --prefer-dist
+      - run: composer audit --no-interaction
+      - run: cp .env.example .env && php artisan key:generate
+      - run: php artisan test --compact
+      - run: vendor/bin/pint --test
+  web:
+    runs-on: ubuntu-latest
+    strategy: { matrix: { directory: [frontend, mcp] } }
+    defaults: { run: { working-directory: "${{ matrix.directory }}" } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: "${{ matrix.directory }}/package-lock.json" }
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run lint --if-present
+      - run: npm run build
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t vive-backend ./backend
+      - run: docker build --build-arg NEXT_PUBLIC_API_URL=/api/v1 -t vive-frontend ./frontend
+      - run: docker build -t vive-mcp ./mcp
+      - run: docker compose config --quiet
+      - run: docker run --rm -v "$PWD/Caddyfile.production:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - run: docker compose -f docker-compose.production.yml config --quiet
+        env:
+          APP_KEY: base64:rT5TT1yPZHA/yjxlfDvQ59Z4Jt3zqpS7OEqrDTUxaG0=
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: ExamplePassword-Only-For-Compose-Validation
+          PUBLIC_DOMAIN: vive.example.com
+          PLATFORM_DOMAIN: apps.example.com
+          DB_PASSWORD: example-database-password
+          REDIS_PASSWORD: example-redis-password
+          DOKPLOY_URL: https://dokploy.example.com
+          DOKPLOY_TOKEN: example-dokploy-token
+          MAIL_MAILER: smtp
+          MAIL_FROM_ADDRESS: no-reply@example.com

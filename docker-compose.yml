@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: vive
+      POSTGRES_USER: vive
+      POSTGRES_PASSWORD: vive_local_password
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U vive"], interval: 5s, timeout: 5s, retries: 10 }
+    networks: [control]
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes: [redis_data:/data]
+    networks: [control]
+  backend:
+    build: { context: ./backend }
+    env_file:
+      - path: ./backend/.env.docker
+        required: false
+    environment: &backend_environment
+      APP_NAME: Vive Host
+      APP_ENV: local
+      APP_KEY: ${APP_KEY:-base64:rT5TT1yPZHA/yjxlfDvQ59Z4Jt3zqpS7OEqrDTUxaG0=}
+      APP_URL: http://localhost:8000
+      FRONTEND_URL: http://localhost:${FRONTEND_PORT:-3000}
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_DATABASE: vive
+      DB_USERNAME: vive
+      DB_PASSWORD: ${DB_PASSWORD:-vive_local_password}
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      REDIS_HOST: redis
+      REDIS_QUEUE_RETRY_AFTER: "2100"
+      REDIS_NOTIFICATION_QUEUE_RETRY_AFTER: "90"
+      DEPLOYMENT_PROVIDER: ${DEPLOYMENT_PROVIDER:-fake}
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:-apps.vive.local}
+      DOKPLOY_URL: ${DOKPLOY_URL:-}
+      DOKPLOY_TOKEN: ${DOKPLOY_TOKEN:-}
+      DOKPLOY_SERVER_ID: ${DOKPLOY_SERVER_ID:-}
+      DOKPLOY_CONNECT_TIMEOUT: ${DOKPLOY_CONNECT_TIMEOUT:-5}
+      DOKPLOY_TIMEOUT: ${DOKPLOY_TIMEOUT:-30}
+      DOKPLOY_DEPLOYMENT_TIMEOUT: ${DOKPLOY_DEPLOYMENT_TIMEOUT:-1500}
+      DOKPLOY_POLL_INTERVAL: ${DOKPLOY_POLL_INTERVAL:-2}
+      DOKPLOY_RAILPACK_VERSION: ${DOKPLOY_RAILPACK_VERSION:-0.15.4}
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8000/api/v1/health/live') === false ? 1 : 0);"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_started } }
+    networks: [control]
+  worker:
+    build: { context: ./backend }
+    command: php artisan queue:work --queue=default --sleep=1 --tries=3 --max-time=3600
+    environment: *backend_environment
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_started } }
+    networks: [control]
+  notification-worker:
+    build: { context: ./backend }
+    command: php artisan queue:work redis-notifications --queue=notifications --sleep=1 --tries=3 --timeout=60 --max-time=3600
+    environment: *backend_environment
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_started } }
+    networks: [control]
+  frontend:
+    build: { context: ./frontend, args: { NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1 } }
+    ports: ["${FRONTEND_PORT:-3000}:3000"]
+    depends_on: [backend]
+    networks: [control]
+  mcp:
+    build: { context: ./mcp }
+    environment:
+      VIVE_API_URL: http://backend:8000/api/v1
+      VIVE_API_TOKEN: ${VIVE_API_TOKEN:-}
+    depends_on: [backend]
+    profiles: [mcp]
+    networks: [control]
+networks:
+  control: { internal: false }
+volumes:
+  postgres_data:
+  redis_data:
