@@ -37,6 +37,16 @@ class User extends Authenticatable implements MustVerifyEmailContract
         return $this->hasOne(Quota::class);
     }
 
+    public function subscription(): HasOne
+    {
+        return $this->hasOne(Subscription::class);
+    }
+
+    public function paymentOrders(): HasMany
+    {
+        return $this->hasMany(PaymentOrder::class);
+    }
+
     public function isAdmin(): bool
     {
         return in_array($this->role, ['ADMIN', 'SUPER_ADMIN'], true);

@@ -1,20 +1,23 @@
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: vive
       POSTGRES_USER: vive
       POSTGRES_PASSWORD: vive_local_password
     volumes: [postgres_data:/var/lib/postgresql/data]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U vive"], interval: 5s, timeout: 5s, retries: 10 }
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U vive -d vive"], interval: 5s, timeout: 5s, retries: 10, start_period: 5s }
     networks: [control]
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes
     volumes: [redis_data:/data]
     networks: [control]
   backend:
     build: { context: ./backend }
+    restart: unless-stopped
     env_file:
       - path: ./backend/.env.docker
         required: false
@@ -54,20 +57,30 @@ services:
     networks: [control]
   worker:
     build: { context: ./backend }
+    restart: unless-stopped
     command: php artisan queue:work --queue=default --sleep=1 --tries=3 --max-time=3600
     environment: *backend_environment
     depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_started } }
     networks: [control]
   notification-worker:
     build: { context: ./backend }
+    restart: unless-stopped
     command: php artisan queue:work redis-notifications --queue=notifications --sleep=1 --tries=3 --timeout=60 --max-time=3600
+    environment: *backend_environment
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_started } }
+    networks: [control]
+  scheduler:
+    build: { context: ./backend }
+    restart: unless-stopped
+    command: php artisan schedule:work
     environment: *backend_environment
     depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_started } }
     networks: [control]
   frontend:
     build: { context: ./frontend, args: { NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1 } }
+    restart: unless-stopped
     ports: ["${FRONTEND_PORT:-3000}:3000"]
-    depends_on: [backend]
+    depends_on: { backend: { condition: service_healthy } }
     networks: [control]
   mcp:
     build: { context: ./mcp }

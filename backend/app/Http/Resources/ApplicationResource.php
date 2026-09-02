@@ -19,6 +19,15 @@ class ApplicationResource extends JsonResource
             'repository_url' => $this->repository_url, 'branch' => $this->branch,
             'framework' => $this->framework, 'status' => $this->status,
             'owner' => new UserResource($this->whenLoaded('user')),
+            'node' => $this->when(
+                $request->user()?->isAdmin() && $this->relationLoaded('node'),
+                fn (): array => [
+                    'id' => $this->node->id,
+                    'name' => $this->node->name,
+                    'code' => $this->node->code,
+                    'status' => $this->node->status->value,
+                ],
+            ),
             'resources' => ['cpu' => (float) $this->cpu_limit, 'memory_mb' => $this->memory_limit_mb, 'disk_mb' => $this->disk_limit_mb],
             'domain' => $this->whenLoaded('domains', fn () => $this->domains->first()?->domain),
             'latest_deployment' => new DeploymentResource($this->whenLoaded('deployments', fn () => $this->deployments->first())),

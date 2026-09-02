@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
+import { clearAuthToken } from "@/lib/auth-token";
 import { LanguageSwitcher } from "./language-switcher";
 import { useI18n } from "@/lib/i18n";
 
@@ -34,7 +35,7 @@ export function ResetPassword({ token, email }: { token: string; email: string }
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError("");
     const form = new FormData(event.currentTarget); const password = String(form.get("password"));
-    try { await api("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, email, password, password_confirmation: form.get("password_confirmation") }) }); localStorage.removeItem("vive_token"); setMessage(t("Mật khẩu đã được đổi. Các phiên cũ đã bị thu hồi.")); }
+    try { await api("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, email, password, password_confirmation: form.get("password_confirmation") }) }); clearAuthToken(); setMessage(t("Mật khẩu đã được đổi. Các phiên cũ đã bị thu hồi.")); }
     catch (caught) { setError(caught instanceof ApiError ? t(caught.message) : t("Không thể đặt lại mật khẩu.")); }
     finally { setBusy(false); }
   };

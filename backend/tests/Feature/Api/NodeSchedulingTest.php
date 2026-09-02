@@ -143,6 +143,23 @@ class NodeSchedulingTest extends TestCase
         $this->assertStringNotContainsString('10.10.10.10', $payload);
     }
 
+    public function test_admin_application_api_includes_safe_node_context_only(): void
+    {
+        $admin = User::factory()->create(['role' => 'ADMIN']);
+        $token = app(AuthTokenService::class)->create($admin, 'Admin')['plain_text_token'];
+        $node = Node::where('code', 'HOME-01')->firstOrFail();
+        $node->update(['provider_server_id' => 'secret-server-id', 'host' => '10.10.10.10']);
+        Application::factory()->for($admin)->create(['node_id' => $node->id]);
+
+        $response = $this->withToken($token)->getJson('/api/v1/admin/apps')->assertOk();
+
+        $response->assertJsonPath('data.0.node.code', 'HOME-01');
+        $payload = $response->getContent();
+        $this->assertStringNotContainsString('secret-server-id', $payload);
+        $this->assertStringNotContainsString('10.10.10.10', $payload);
+        $this->assertStringNotContainsString('provider_server_id', $payload);
+    }
+
     /** @return array{User, string} */
     private function userWithToken(): array
     {

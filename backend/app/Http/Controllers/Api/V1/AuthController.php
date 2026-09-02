@@ -8,17 +8,19 @@ use App\Http\Requests\Api\RegisterRequest;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Services\AuthTokenService;
+use App\Services\SubscriptionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 
 class AuthController extends Controller
 {
-    public function __construct(private AuthTokenService $tokens) {}
+    public function __construct(private AuthTokenService $tokens, private SubscriptionService $subscriptions) {}
 
     public function register(RegisterRequest $request): JsonResponse
     {
         $user = User::create([...$request->safe()->except('password_confirmation'), 'status' => 'BETA', 'role' => 'USER']);
+        $this->subscriptions->for($user);
         $token = $this->tokens->create($user, $request->userAgent() ?: 'Browser');
         try {
             $user->sendEmailVerificationNotification();
@@ -49,6 +51,8 @@ class AuthController extends Controller
 
     public function me(Request $request): JsonResponse
     {
-        return response()->json(['data' => new UserResource($request->user()), 'meta' => (object) [], 'request_id' => $request->attributes->get('request_id')]);
+        $this->subscriptions->for($request->user());
+
+        return response()->json(['data' => new UserResource($request->user()->load(['subscription.plan', 'quota'])), 'meta' => (object) [], 'request_id' => $request->attributes->get('request_id')]);
     }
 }

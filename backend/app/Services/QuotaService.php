@@ -8,6 +8,8 @@ use Illuminate\Validation\ValidationException;
 
 class QuotaService
 {
+    public function __construct(private SubscriptionService $subscriptions) {}
+
     public function for(User $user): Quota
     {
         return $user->quota()->firstOrCreate([], ['max_apps' => 1, 'max_memory_mb_per_app' => 512, 'max_cpu_per_app' => 0.5, 'max_disk_mb_per_app' => 2048, 'max_build_concurrency' => 1]);
@@ -15,6 +17,7 @@ class QuotaService
 
     public function assertCanCreateApplication(User $user): Quota
     {
+        $this->subscriptions->assertCanProvision($user);
         $quota = $this->for($user);
         if ($user->applications()->count() >= $quota->max_apps) {
             throw ValidationException::withMessages(['quota' => ['Application limit reached.']]);
@@ -25,6 +28,7 @@ class QuotaService
 
     public function assertCanCreateDeployment(User $user): Quota
     {
+        $this->subscriptions->assertCanProvision($user);
         $quota = $this->for($user);
         $activeDeployments = $user->applications()->whereHas(
             'deployments',

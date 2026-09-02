@@ -14,6 +14,7 @@ import {
   ManagedDatabase,
   Usage,
 } from "@/lib/api";
+import { getAuthToken } from "@/lib/auth-token";
 import { SelectField } from "./select-field";
 import { LanguageSwitcher } from "./language-switcher";
 import { StatusBadge } from "./status-badge";
@@ -81,7 +82,7 @@ export function ApplicationDetail({ appId }: { appId: string }) {
 
   useEffect(() => {
     Promise.resolve().then(async () => {
-      const saved = localStorage.getItem("vive_token");
+      const saved = getAuthToken();
       if (!saved) {
         setError(t("Bạn cần đăng nhập để xem ứng dụng."));
         return;

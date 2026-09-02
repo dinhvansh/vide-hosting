@@ -7,6 +7,15 @@ return [
     'api_token_ttl_minutes' => env('API_TOKEN_TTL_MINUTES', 43200),
     'mcp_token_ttl_minutes' => env('MCP_TOKEN_TTL_MINUTES', 525600),
     'custom_domains_enabled' => env('CUSTOM_DOMAINS_ENABLED', false),
+    'billing' => ['app_slot_monthly_price_vnd' => (int) env('APP_SLOT_MONTHLY_PRICE_VND', 49000)],
+    'sepay' => [
+        'merchant_id' => env('SEPAY_MERCHANT_ID'),
+        'secret_key' => env('SEPAY_SECRET_KEY'),
+        'ipn_secret' => env('SEPAY_IPN_SECRET'),
+        'api_url' => env('SEPAY_API_URL'),
+        'checkout_url' => env('SEPAY_CHECKOUT_URL'),
+        'pending_ttl_minutes' => (int) env('SEPAY_PENDING_PAYMENT_TTL_MINUTES', 30),
+    ],
     'admin_seed' => [
         'name' => env('ADMIN_NAME', 'Vive Admin'),
         'email' => env('ADMIN_EMAIL', 'admin@vive.local'),

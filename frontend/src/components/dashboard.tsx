@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, ApiError, Application, User } from "@/lib/api";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, Application, BillingCatalog, CheckoutResult, PaymentOrder, User } from "@/lib/api";
+import { clearAuthToken, getAuthToken, storeAuthToken } from "@/lib/auth-token";
 import { LanguageSwitcher } from "./language-switcher";
 import { SelectField } from "./select-field";
 import { StatusBadge } from "./status-badge";
@@ -12,11 +13,20 @@ import { useSectionNavigation } from "./use-section-navigation";
 const DASHBOARD_SECTIONS = [
   "dashboard-overview",
   "dashboard-usage",
+  "dashboard-billing",
   "dashboard-applications",
   "dashboard-deployments",
 ] as const;
 
 type AuthResult = { user: User; token: string };
+
+function formatSubscriptionTerm(user: User, locale: string, t: (source: string, variables?: Record<string, string | number>) => string): string {
+  if (!user.subscription?.ends_at) return t("Không giới hạn");
+  const end = new Date(user.subscription.ends_at);
+  const days = Math.ceil((end.getTime() - Date.now()) / 86400000);
+  if (days < 0 || user.subscription.status === "EXPIRED") return t("Đã hết hạn {date}", { date: end.toLocaleDateString(locale) });
+  return t("Còn {count} ngày · đến {date}", { count: days, date: end.toLocaleDateString(locale) });
+}
 
 export function Dashboard({
   initialRegister = false,
@@ -29,19 +39,26 @@ export function Dashboard({
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [selected, setSelected] = useState<Application | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [billing, setBilling] = useState<BillingCatalog | null>(null);
+  const [showBilling, setShowBilling] = useState(false);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const paymentReturnHandled = useRef(false);
   const { activeSection, navigateToSection } =
     useSectionNavigation(DASHBOARD_SECTIONS);
 
   const loadApps = useCallback(async (authToken: string) => {
-    const [profile, applications] = await Promise.all([
+    const [profile, applications, catalog] = await Promise.all([
       api<User>("/me", {}, authToken),
       api<Application[]>("/apps", {}, authToken),
+      api<BillingCatalog>("/billing/catalog", {}, authToken),
     ]);
     setUser(profile);
     setApps(applications);
+    setBilling(catalog);
     setSelected((current) =>
       current
         ? (applications.find((application) => application.id === current.id) ??
@@ -52,7 +69,7 @@ export function Dashboard({
 
   useEffect(() => {
     Promise.resolve().then(async () => {
-      const saved = localStorage.getItem("vive_token");
+      const saved = getAuthToken();
       if (!saved) {
         setLoading(false);
         return;
@@ -61,7 +78,7 @@ export function Dashboard({
       try {
         await loadApps(saved);
       } catch {
-        localStorage.removeItem("vive_token");
+        clearAuthToken();
         setToken(null);
       } finally {
         setLoading(false);
@@ -75,6 +92,19 @@ export function Dashboard({
     }, 10000);
     return () => window.clearInterval(timer);
   }, [loadApps, token]);
+  useEffect(() => {
+    if (!token || paymentReturnHandled.current) return;
+    const orderId = new URLSearchParams(window.location.search).get("payment_order");
+    if (!orderId) return;
+    paymentReturnHandled.current = true;
+    api<PaymentOrder>(`/billing/orders/${orderId}/reconcile`, { method: "POST", body: "{}" }, token)
+      .then(async (order) => {
+        setNotice(order.status === "APPROVED" ? t("Thanh toán thành công. Quyền lợi đã được cập nhật.") : t("Đang chờ SePay xác nhận thanh toán."));
+        await loadApps(token);
+      })
+      .catch(() => setError(t("Không thể kiểm tra trạng thái thanh toán.")))
+      .finally(() => window.history.replaceState({}, "", window.location.pathname));
+  }, [loadApps, t, token]);
 
   const authenticate = async (
     event: FormEvent<HTMLFormElement>,
@@ -98,7 +128,10 @@ export function Dashboard({
           }),
         },
       );
-      localStorage.setItem("vive_token", result.token);
+      storeAuthToken(
+        result.token,
+        register || form.get("remember_login") === "on",
+      );
       setToken(result.token);
       await loadApps(result.token);
     } catch (caught) {
@@ -163,6 +196,37 @@ export function Dashboard({
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkout = async (event: FormEvent<HTMLFormElement>, type: "PLAN" | "APP_SLOT") => {
+    event.preventDefault();
+    if (!token || !billing?.payment_available) return;
+    setBillingLoading(true);
+    setError("");
+    const data = new FormData(event.currentTarget);
+    try {
+      const result = await api<CheckoutResult>("/billing/orders", {
+        method: "POST",
+        body: JSON.stringify(type === "PLAN" ? {
+          type,
+          plan_id: data.get("plan_id"),
+          duration_months: Number(data.get("duration_months")),
+        } : { type, quantity: Number(data.get("quantity")) }),
+      }, token);
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = result.checkout.url;
+      Object.entries(result.checkout.fields).forEach(([name, value]) => {
+        const input = document.createElement("input");
+        input.type = "hidden"; input.name = name; input.value = value; form.appendChild(input);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? t(caught.message) : t("Không thể tạo đơn thanh toán."));
+    } finally {
+      setBillingLoading(false);
     }
   };
 
@@ -285,6 +349,17 @@ export function Dashboard({
           >
             {t("Usage")}
           </a>
+          <a
+            href="#dashboard-billing"
+            className={activeSection === "dashboard-billing" ? "active" : ""}
+            onClick={(event) => {
+              event.preventDefault();
+              navigateToSection("dashboard-billing");
+              setMobileNavOpen(false);
+            }}
+          >
+            {t("Gói & thanh toán")}
+          </a>
           <Link href={href("/account")} onClick={() => setMobileNavOpen(false)}>
             {t("Tài khoản & MCP")}
           </Link>
@@ -300,7 +375,7 @@ export function Dashboard({
           <span>{user.email}</span>
           <button
             onClick={() => {
-              localStorage.removeItem("vive_token");
+              clearAuthToken();
               setToken(null);
               setUser(null);
               setMobileNavOpen(false);
@@ -353,6 +428,27 @@ export function Dashboard({
               <button onClick={() => setError("")}>×</button>
             </div>
           )}
+          {notice && <div className="alert success-alert"><b>{t("Thanh toán")}</b><span>{notice}</span><button onClick={() => setNotice("")}>×</button></div>}
+          <section id="dashboard-billing" className="customer-plan-card dashboard-section-anchor">
+            <div>
+              <span>{t("Gói hiện tại")}</span>
+              <b>{user.subscription?.plan.name ?? t("Open Beta")}</b>
+              <small>{t(user.subscription?.status ?? "TRIALING")}</small>
+            </div>
+            <div>
+              <span>{t("Thời hạn gói")}</span>
+              <b>{formatSubscriptionTerm(user, dateLocale, t)}</b>
+              <small>{t("Không tự động gia hạn hoặc trừ tiền")}</small>
+            </div>
+            <div>
+              <span>{t("Hạn mức")}</span>
+              <b>{t("{apps} app · {ram} MB RAM · {cpu} CPU", { apps: user.quota?.max_apps ?? 1, ram: user.quota?.max_memory_mb_per_app ?? 512, cpu: user.quota?.max_cpu_per_app ?? 0.5 })}</b>
+              <small>{t("{count} slot mua thêm", { count: user.subscription?.extra_app_slots ?? 0 })}</small>
+              <button className="button primary plan-action" onClick={() => setShowBilling(true)}>
+                {t("Gia hạn / mua thêm app")}
+              </button>
+            </div>
+          </section>
           <section id="dashboard-usage" className="stat-strip dashboard-section-anchor">
             <div>
               <span>{t("Ứng dụng")}</span>
@@ -374,7 +470,7 @@ export function Dashboard({
           <section id="dashboard-applications" className="section dashboard-section-anchor">
             <div className="section-title">
               <h2>{t("Ứng dụng gần đây")}</h2>
-              <span>{t("Giới hạn beta: 1 ứng dụng")}</span>
+              <span>{t("Giới hạn: {count} ứng dụng", { count: user.quota?.max_apps ?? 1 })}</span>
             </div>
             {apps.length === 0 ? (
               <div className="empty">
@@ -503,6 +599,15 @@ export function Dashboard({
           loading={loading}
         />
       )}
+      {showBilling && billing && (
+        <BillingDrawer
+          catalog={billing}
+          currentPlanId={user.subscription?.plan.id}
+          loading={billingLoading}
+          onClose={() => setShowBilling(false)}
+          onCheckout={checkout}
+        />
+      )}
       {selected && token && (
         <AppDrawer
           app={selected}
@@ -512,6 +617,50 @@ export function Dashboard({
           onRestart={() => restart(selected)}
         />
       )}
+    </div>
+  );
+}
+
+function BillingDrawer({ catalog, currentPlanId, loading, onClose, onCheckout }: {
+  catalog: BillingCatalog;
+  currentPlanId?: string;
+  loading: boolean;
+  onClose: () => void;
+  onCheckout: (event: FormEvent<HTMLFormElement>, type: "PLAN" | "APP_SLOT") => void;
+}) {
+  const { t, dateLocale } = useI18n();
+  const money = (value: number) => new Intl.NumberFormat(dateLocale, { style: "currency", currency: "VND", maximumFractionDigits: 0 }).format(value);
+  const defaultPlan = catalog.plans.find((plan) => plan.id === currentPlanId) ?? catalog.plans[0];
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <aside className="drawer billing-drawer" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawer-head">
+          <div><span className="drawer-kicker">{t("BILLING")}</span><h2>{t("Gói & thanh toán")}</h2><p>{t("Tự gia hạn gói hoặc tăng số ứng dụng được phép tạo.")}</p></div>
+          <button aria-label={t("Đóng")} onClick={onClose}>×</button>
+        </div>
+        {!catalog.payment_available && <div className="billing-notice"><b>{t("Thanh toán chưa sẵn sàng")}</b><span>{t("Hệ thống chưa được cấu hình SePay. Liên hệ hỗ trợ để kích hoạt thanh toán.")}</span></div>}
+        <form className="billing-option" onSubmit={(event) => onCheckout(event, "PLAN")}>
+          <div className="billing-option-head"><div><span>{t("GIA HẠN / NÂNG GÓI")}</span><h3>{t("Chọn gói dịch vụ")}</h3></div></div>
+          {defaultPlan ? <>
+            <label>{t("Gói")}
+              <SelectField name="plan_id" defaultValue={defaultPlan.id} ariaLabel={t("Gói dịch vụ")} options={catalog.plans.map((plan) => ({ value: plan.id, label: `${plan.name} · ${money(plan.monthly_price_vnd)}/${t("tháng")}`, description: t("{count} ứng dụng · {ram} MB RAM mỗi app", { count: plan.max_apps, ram: plan.max_memory_mb_per_app }) }))} />
+            </label>
+            <label>{t("Thời hạn")}
+              <SelectField name="duration_months" defaultValue="1" ariaLabel={t("Thời hạn")} options={catalog.terms.map((term) => ({ value: String(term), label: t("{count} tháng", { count: term }), description: t("Thanh toán một lần, không tự động trừ tiền") }))} />
+            </label>
+            <button className="button primary billing-submit" disabled={!catalog.payment_available || loading}>{loading ? t("Đang xử lý…") : t("Tiếp tục thanh toán")}</button>
+          </> : <p className="muted">{t("Chưa có gói trả phí được công bố.")}</p>}
+        </form>
+        <form className="billing-option" onSubmit={(event) => onCheckout(event, "APP_SLOT")}>
+          <div className="billing-option-head"><div><span>{t("MUA THÊM ỨNG DỤNG")}</span><h3>{t("Tăng hạn mức ứng dụng")}</h3></div><b>{money(catalog.app_slot_monthly_price_vnd)}/{t("slot/tháng")}</b></div>
+          <p>{t("Slot mua thêm đi cùng thời hạn gói hiện tại và được tính lại khi gia hạn.")}</p>
+          <label>{t("Số slot cần thêm")}
+            <SelectField name="quantity" defaultValue="1" ariaLabel={t("Số slot cần thêm")} options={[1, 2, 3, 5, 10].map((quantity) => ({ value: String(quantity), label: t("+{count} ứng dụng", { count: quantity }), description: money(catalog.app_slot_monthly_price_vnd * quantity) + "/" + t("tháng") }))} />
+          </label>
+          <button className="button secondary billing-submit" disabled={!catalog.payment_available || loading}>{loading ? t("Đang xử lý…") : t("Mua thêm slot")}</button>
+        </form>
+        <small className="billing-policy">{t("Quyền lợi chỉ được cộng sau khi SePay xác nhận thanh toán. IPN lặp lại không cộng trùng.")}</small>
+      </aside>
     </div>
   );
 }
@@ -600,9 +749,15 @@ function AuthScreen({
           </label>
         )}
         {!register && (
-          <Link className="auth-inline-link" href={href("/forgot-password")}>
-            {t("Quên mật khẩu?")}
-          </Link>
+          <div className="auth-login-options">
+            <label className="auth-remember">
+              <input name="remember_login" type="checkbox" defaultChecked />
+              <span>{t("Ghi nhớ đăng nhập")}</span>
+            </label>
+            <Link className="auth-inline-link" href={href("/forgot-password")}>
+              {t("Quên mật khẩu?")}
+            </Link>
+          </div>
         )}
         <button className="button primary auth-submit" disabled={loading}>
           {loading

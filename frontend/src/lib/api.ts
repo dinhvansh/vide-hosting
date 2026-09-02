@@ -1,7 +1,14 @@
-export type User = { id: string; name: string; email: string; email_verified_at?: string | null; role: string; status: string; applications_count?: number; applications_memory_limit_mb?: number; quota?: Quota; created_at?: string };
+export type Plan = { id: string; code: string; name: string; monthly_price_vnd: number; max_apps: number; max_memory_mb_per_app: number; max_cpu_per_app: number; max_disk_mb_per_app: number; max_build_concurrency: number; is_default: boolean; is_published: boolean };
+export type Subscription = { id: string; status: string; billing_cycle: string; extra_app_slots: number; starts_at: string; ends_at: string | null; grace_ends_at: string | null; plan: Plan };
+export type User = { id: string; name: string; email: string; email_verified_at?: string | null; role: string; status: string; applications_count?: number; applications_memory_limit_mb?: number; quota?: Quota; subscription?: Subscription; created_at?: string };
 export type Quota = { max_apps: number; max_memory_mb_per_app: number; max_cpu_per_app: number; max_disk_mb_per_app: number; max_build_concurrency: number };
+export type BillingPlan = Plan & { max_apps: number; max_memory_mb_per_app: number; max_cpu_per_app: number; max_disk_mb_per_app: number; max_build_concurrency: number };
+export type BillingCatalog = { plans: BillingPlan[]; terms: number[]; app_slot_monthly_price_vnd: number; extra_app_slots: number; payment_available: boolean };
+export type PaymentOrder = { id: string; invoice_number: string; type: string; duration_months: number | null; quantity: number; amount_vnd: number; status: string; approved_at: string | null; expires_at: string; created_at: string };
+export type CheckoutResult = { order: PaymentOrder; checkout: { url: string; fields: Record<string, string> } };
 export type Deployment = { id: string; status: string; branch: string; commit_sha: string | null; created_at: string; error?: { code: string; message: string } | null };
-export type Application = { id: string; name: string; slug: string; repository_url: string; branch: string; framework: string; status: string; domain?: string | null; owner?: User; resources: { cpu: number; memory_mb: number; disk_mb: number }; latest_deployment?: Deployment | null; created_at: string };
+export type ApplicationNode = { id: string; name: string; code: string; status: string };
+export type Application = { id: string; name: string; slug: string; repository_url: string; branch: string; framework: string; status: string; domain?: string | null; owner?: User; node?: ApplicationNode; resources: { cpu: number; memory_mb: number; disk_mb: number }; latest_deployment?: Deployment | null; created_at: string };
 export type EnvironmentVariable = { key: string; is_secret: boolean; has_value: boolean; updated_at: string };
 export type Domain = { id: string; domain: string; type: string; status: string; ssl_status: string; created_at: string };
 export type ManagedDatabase = { id: string; type: string; database_name: string; database_user: string; host: string; port: number; status: string; has_password: boolean; created_at: string };

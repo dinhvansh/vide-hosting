@@ -7,6 +7,7 @@ use App\Models\AuditLog;
 use App\Models\Deployment;
 use App\Models\User;
 use App\Services\AuthTokenService;
+use App\Services\SubscriptionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -38,6 +39,30 @@ class AdminTest extends TestCase
         $this->withToken($token)->getJson('/api/v1/admin/users')->assertForbidden();
     }
 
+    public function test_admin_can_create_and_update_a_plan_and_sync_subscriber_quota(): void
+    {
+        $admin = User::factory()->create(['role' => 'ADMIN', 'status' => 'ACTIVE']);
+        $token = app(AuthTokenService::class)->create($admin, 'Test')['plain_text_token'];
+        $payload = [
+            'code' => 'creator_plus', 'name' => 'Creator Plus', 'monthly_price_vnd' => 199000,
+            'max_apps' => 8, 'max_memory_mb_per_app' => 2048, 'max_cpu_per_app' => 2,
+            'max_disk_mb_per_app' => 20480, 'max_build_concurrency' => 2,
+            'is_default' => false, 'is_published' => true,
+        ];
+
+        $response = $this->withToken($token)->postJson('/api/v1/admin/plans', $payload)
+            ->assertCreated()->assertJsonPath('data.code', 'CREATOR_PLUS')->assertJsonPath('data.max_apps', 8);
+        $planId = $response->json('data.id');
+        $user = User::factory()->create();
+        app(SubscriptionService::class)->for($user)->update(['plan_id' => $planId, 'extra_app_slots' => 2]);
+
+        $this->withToken($token)->patchJson('/api/v1/admin/plans/'.$planId, [...$payload, 'code' => 'CREATOR_PLUS', 'max_apps' => 12])
+            ->assertOk()->assertJsonPath('data.max_apps', 12);
+
+        $this->assertDatabaseHas('quotas', ['user_id' => $user->id, 'max_apps' => 14]);
+        $this->assertDatabaseHas('audit_logs', ['action' => 'admin.plan_updated', 'resource_id' => $planId]);
+    }
+
     public function test_admin_route_returns_403_when_admin_is_suspended(): void
     {
         $admin = User::factory()->create(['role' => 'ADMIN', 'status' => 'SUSPENDED']);
@@ -61,6 +86,21 @@ class AdminTest extends TestCase
             ->assertJsonPath('data.0.applications_count', 1)
             ->assertJsonPath('data.0.applications_memory_limit_mb', 768);
         $this->withToken($token)->getJson('/api/v1/admin/system/build-queue')->assertOk()->assertJsonPath('meta.total', 0);
+    }
+
+    public function test_admin_user_detail_creates_and_returns_the_default_quota(): void
+    {
+        $admin = User::factory()->create(['role' => 'ADMIN', 'status' => 'ACTIVE']);
+        $token = app(AuthTokenService::class)->create($admin, 'Test')['plain_text_token'];
+        $user = User::factory()->create();
+
+        $this->assertDatabaseMissing('quotas', ['user_id' => $user->id]);
+
+        $this->withToken($token)->getJson('/api/v1/admin/users/'.$user->id)->assertOk()
+            ->assertJsonPath('data.user.quota.max_apps', 1)
+            ->assertJsonPath('data.user.quota.max_memory_mb_per_app', 512);
+
+        $this->assertDatabaseHas('quotas', ['user_id' => $user->id, 'max_apps' => 1]);
     }
 
     public function test_admin_overview_tracks_open_beta_product_metrics(): void

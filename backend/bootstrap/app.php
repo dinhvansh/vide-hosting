@@ -5,6 +5,7 @@ use App\Http\Middleware\AddRequestId;
 use App\Http\Middleware\AuditMcpRequest;
 use App\Http\Middleware\AuthenticateApiToken;
 use App\Http\Middleware\EnsureAdmin;
+use App\Http\Middleware\EnsureSubscriptionActive;
 use App\Http\Middleware\EnsureTokenAbility;
 use App\Http\Middleware\EnsureUserActive;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -27,6 +28,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'api.token' => AuthenticateApiToken::class,
             'mcp.audit' => AuditMcpRequest::class,
             'active' => EnsureUserActive::class,
+            'subscription.active' => EnsureSubscriptionActive::class,
             'admin' => EnsureAdmin::class,
             'token.ability' => EnsureTokenAbility::class,
         ]);

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, ApiError, ApiTokenRecord, User } from "@/lib/api";
+import { getAuthToken } from "@/lib/auth-token";
 import { LanguageSwitcher } from "./language-switcher";
 import { StatusBadge } from "./status-badge";
 import { useI18n } from "@/lib/i18n";
@@ -28,7 +29,7 @@ export function AccountSettings() {
 
   useEffect(() => {
     Promise.resolve().then(async () => {
-      const saved = localStorage.getItem("vive_token");
+      const saved = getAuthToken();
       if (!saved) {
         setError(t("Bạn cần đăng nhập trước."));
         return;

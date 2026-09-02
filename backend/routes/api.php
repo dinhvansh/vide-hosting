@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\AdminController;
 use App\Http\Controllers\Api\V1\ApplicationController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\BillingController;
 use App\Http\Controllers\Api\V1\DatabaseController;
 use App\Http\Controllers\Api\V1\DeploymentController;
 use App\Http\Controllers\Api\V1\DomainController;
@@ -22,6 +23,7 @@ Route::prefix('v1')->group(function (): void {
     Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:auth');
     Route::post('/auth/forgot-password', [PasswordController::class, 'forgot'])->middleware('throttle:auth');
     Route::post('/auth/reset-password', [PasswordController::class, 'reset'])->middleware('throttle:auth');
+    Route::post('/payments/ipn', [BillingController::class, 'ipn'])->middleware('throttle:api');
     Route::get('/auth/email/verify/{id}/{hash}', [EmailVerificationController::class, 'verify'])->middleware(['signed', 'throttle:auth'])->name('verification.verify');
 
     Route::middleware(['api.token', 'mcp.audit', 'throttle:api'])->group(function (): void {
@@ -44,20 +46,24 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/apps/{app}/databases', [DatabaseController::class, 'index'])->middleware('token.ability:databases:read');
         Route::get('/apps/{app}/usage', [UsageController::class, 'show'])->middleware('token.ability:usage:read');
         Route::get('/usage', [UsageController::class, 'index'])->middleware('token.ability:usage:read');
+        Route::get('/billing/catalog', [BillingController::class, 'catalog'])->middleware('token.ability:account:read');
+        Route::post('/billing/orders', [BillingController::class, 'createOrder'])->middleware(['active', 'token.ability:account:read']);
+        Route::get('/billing/orders/{paymentOrder}', [BillingController::class, 'show'])->middleware('token.ability:account:read');
+        Route::post('/billing/orders/{paymentOrder}/reconcile', [BillingController::class, 'reconcile'])->middleware('token.ability:account:read');
 
         Route::middleware('active')->group(function (): void {
-            Route::post('/apps', [ApplicationController::class, 'store'])->middleware('token.ability:projects:create');
-            Route::patch('/apps/{app}', [ApplicationController::class, 'update'])->middleware('token.ability:apps:write');
+            Route::post('/apps', [ApplicationController::class, 'store'])->middleware(['subscription.active', 'token.ability:projects:create']);
+            Route::patch('/apps/{app}', [ApplicationController::class, 'update'])->middleware(['subscription.active', 'token.ability:apps:write']);
             Route::delete('/apps/{app}', [ApplicationController::class, 'destroy'])->middleware('token.ability:apps:delete');
-            Route::post('/apps/{app}/deployments', [DeploymentController::class, 'store'])->middleware(['token.ability:deployments:create', 'throttle:deployment-create']);
-            Route::post('/apps/{app}/restart', [DeploymentController::class, 'restart'])->middleware(['token.ability:apps:operate', 'throttle:app-operation']);
+            Route::post('/apps/{app}/deployments', [DeploymentController::class, 'store'])->middleware(['subscription.active', 'token.ability:deployments:create', 'throttle:deployment-create']);
+            Route::post('/apps/{app}/restart', [DeploymentController::class, 'restart'])->middleware(['subscription.active', 'token.ability:apps:operate', 'throttle:app-operation']);
             Route::post('/apps/{app}/stop', [DeploymentController::class, 'stop'])->middleware(['token.ability:apps:operate', 'throttle:app-operation']);
-            Route::post('/apps/{app}/env', [EnvironmentVariableController::class, 'store'])->middleware('token.ability:env:write');
-            Route::patch('/apps/{app}/env/{key}', [EnvironmentVariableController::class, 'store'])->middleware('token.ability:env:write');
+            Route::post('/apps/{app}/env', [EnvironmentVariableController::class, 'store'])->middleware(['subscription.active', 'token.ability:env:write']);
+            Route::patch('/apps/{app}/env/{key}', [EnvironmentVariableController::class, 'store'])->middleware(['subscription.active', 'token.ability:env:write']);
             Route::delete('/apps/{app}/env/{key}', [EnvironmentVariableController::class, 'destroy'])->middleware('token.ability:env:write');
-            Route::post('/apps/{app}/domains', [DomainController::class, 'store'])->middleware('token.ability:domains:write');
+            Route::post('/apps/{app}/domains', [DomainController::class, 'store'])->middleware(['subscription.active', 'token.ability:domains:write']);
             Route::delete('/apps/{app}/domains/{domain}', [DomainController::class, 'destroy'])->middleware('token.ability:domains:write');
-            Route::post('/apps/{app}/databases', [DatabaseController::class, 'store'])->middleware('token.ability:databases:write');
+            Route::post('/apps/{app}/databases', [DatabaseController::class, 'store'])->middleware(['subscription.active', 'token.ability:databases:write']);
             Route::delete('/apps/{app}/databases/{database}', [DatabaseController::class, 'destroy'])->middleware('token.ability:databases:write');
         });
 
@@ -73,12 +79,16 @@ Route::prefix('v1')->group(function (): void {
             Route::post('/nodes/{node}/maintenance', [NodeController::class, 'maintenance']);
             Route::post('/nodes/{node}/disable', [NodeController::class, 'disable']);
             Route::get('/users', [AdminController::class, 'users']);
+            Route::get('/plans', [AdminController::class, 'plans']);
+            Route::post('/plans', [AdminController::class, 'createPlan']);
+            Route::patch('/plans/{plan}', [AdminController::class, 'updatePlan']);
             Route::get('/users/{user}', [AdminController::class, 'user']);
             Route::get('/apps', [AdminController::class, 'apps']);
             Route::get('/apps/{app}', [AdminController::class, 'app']);
             Route::post('/users/{user}/suspend', [AdminController::class, 'suspend']);
             Route::post('/users/{user}/activate', [AdminController::class, 'activate']);
             Route::patch('/users/{user}/quota', [AdminController::class, 'quota']);
+            Route::patch('/users/{user}/subscription', [AdminController::class, 'subscription']);
             Route::post('/apps/{app}/restart', [AdminController::class, 'restartApp'])->middleware('throttle:app-operation');
             Route::post('/apps/{app}/stop', [AdminController::class, 'stopApp'])->middleware('throttle:app-operation');
             Route::post('/apps/{app}/redeploy', [AdminController::class, 'redeployApp'])->middleware('throttle:deployment-create');
